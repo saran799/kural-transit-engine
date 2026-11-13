@@ -123,3 +123,68 @@ class JourneyPlanResponse(BaseModel):
     error_details: Optional[str] = None
     suggestions: Optional[List[str]] = None
 
+
+class KuralToolJourneyRequest(BaseModel):
+    """
+    Request schema matching ElevenLabs / n8n conversational agent tool definitions.
+    Accepts origin, destination, mode, language, call_id, and standard routing options.
+    """
+    origin: Optional[str] = Field(
+        default=None,
+        description="Origin stop name or place (e.g. 'Poonamallee')",
+        examples=["Poonamallee"]
+    )
+    source: Optional[Union[str, Coordinate]] = Field(
+        default=None,
+        description="Alternative field for origin: stop ID, stop name, or coordinates {lat, lon}"
+    )
+    destination: Union[str, Coordinate] = Field(
+        ...,
+        description="Destination stop ID, stop name (e.g. 'Porur'), or coordinates {lat, lon}",
+        examples=["Porur"]
+    )
+    departure_time: Optional[str] = Field(
+        default=None,
+        description="Departure time in HH:MM:SS or HH:MM format"
+    )
+    date: Optional[str] = Field(
+        default=None,
+        description="Service date in YYYY-MM-DD format"
+    )
+    mode: Optional[str] = Field(
+        default=None,
+        description="Preferred transit mode, e.g. 'Bus', 'Metro', or 'Suburban Rail'"
+    )
+    modes: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of transit modes to allow"
+    )
+    language: str = Field(
+        default="en",
+        description="Response language: 'en' for English, 'ta' for Tamil (தமிழ்)"
+    )
+    max_transfers: int = Field(
+        default=2,
+        ge=0,
+        le=3,
+        description="Maximum transfers allowed (0 = direct only, 1 or 2 = transfers allowed)"
+    )
+    call_id: Optional[str] = Field(
+        default=None,
+        description="ElevenLabs or telephony conversation / call ID"
+    )
+
+
+class KuralToolJourneyResponse(BaseModel):
+    """
+    Response schema matching ElevenLabs conversational agent tool expectations.
+    Includes voice-optimized spoken_response, options summary, and found flag.
+    """
+    found: bool = Field(..., description="Whether at least one valid journey was found")
+    spoken_response: str = Field(..., description="Natural language spoken response formatted for TTS voice delivery")
+    total_options: int = Field(..., description="Total number of journey options found")
+    options: List[JourneyOption] = Field(default=[], description="List of journey options with legs, stops, and schedules")
+    raw_plan: Optional[JourneyPlanResponse] = Field(default=None, description="Complete underlying journey plan data")
+    call_id: Optional[str] = Field(default=None, description="Echoed call identifier")
+
+

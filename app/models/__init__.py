@@ -11,6 +11,8 @@ from app.models.journey import (
     JourneyOption,
     JourneyLeg,
     IntermediateStop,
+    KuralToolJourneyRequest,
+    KuralToolJourneyResponse,
 )
 from app.models.health import HealthResponse
 
@@ -25,6 +27,8 @@ __all__ = [
     "JourneyOption",
     "JourneyLeg",
     "IntermediateStop",
+    "KuralToolJourneyRequest",
+    "KuralToolJourneyResponse",
     "HealthResponse",
 ]
 

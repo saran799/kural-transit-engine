@@ -64,6 +64,7 @@ def root():
         "endpoints": {
             "health": "GET /health",
             "journey_plan": "POST /api/journey/plan",
+            "kural_tool_search_journey": "POST /api/kural/tools/search_journey",
             "stops_search": "GET /api/stops/search",
             "routes_search": "GET /api/routes/search",
         },
