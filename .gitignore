@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+env/
+venv/
+*.db-journal
+.DS_Store
+Thumbs.db
+
+
+# Generated transit database
+transit_engine.db
