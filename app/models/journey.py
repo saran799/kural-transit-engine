@@ -145,7 +145,8 @@ class KuralToolJourneyRequest(BaseModel):
     )
     departure_time: Optional[str] = Field(
         default=None,
-        description="Departure time in HH:MM:SS or HH:MM format"
+        description="Optional departure time in HH:MM format (or HH:MM:SS)",
+        examples=["10:00", "08:30:00"]
     )
     date: Optional[str] = Field(
         default=None,

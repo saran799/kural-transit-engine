@@ -78,3 +78,23 @@ def test_kural_tool_search_journey_unresolvable_location():
     assert res.total_options == 0
     assert "no transit journeys were found" in res.spoken_response.lower() or "sorry" in res.spoken_response.lower()
 
+
+def test_kural_tool_morning_departure_10am():
+    """Test voice tool with explicit morning departure time at 10:00 (HH:MM format)."""
+    req = KuralToolJourneyRequest(
+        origin="Poonamallee",
+        destination="Porur",
+        departure_time="10:00",
+        language="en"
+    )
+    res = search_journey_tool(req)
+    assert res.found is True
+    assert res.total_options > 0
+    assert res.raw_plan is not None
+    assert res.raw_plan.departure_time == "10:00"
+    # Ensure options depart at or after 10:00:00
+    for opt in res.options:
+        assert opt.departure_time >= "10:00:00"
+
+
+
