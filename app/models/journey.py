@@ -107,6 +107,14 @@ class JourneyOption(BaseModel):
     ranking_score: float
     legs: List[JourneyLeg]
     is_live: bool = False
+    # Convenience fields for integrations (n8n, Telegram, ElevenLabs)
+    primary_mode: Optional[str] = None
+    primary_route: Optional[str] = None
+    boarding_stop: Optional[str] = None
+    destination_stop: Optional[str] = None
+    fare: Optional[str] = None
+    data_notice: Optional[str] = "Scheduled timetable data (GTFS static). Real-time GPS unavailable."
+
 
 
 class JourneyPlanResponse(BaseModel):
@@ -179,13 +187,18 @@ class KuralToolJourneyRequest(BaseModel):
 class KuralToolJourneyResponse(BaseModel):
     """
     Response schema matching ElevenLabs conversational agent tool expectations.
-    Includes voice-optimized spoken_response, options summary, and found flag.
+    Includes voice-optimized spoken_response, options summary, origin, destination, and found flag.
     """
     found: bool = Field(..., description="Whether at least one valid journey was found")
     spoken_response: str = Field(..., description="Natural language spoken response formatted for TTS voice delivery")
+    origin: str = Field(..., description="Resolved origin name or input place")
+    destination: str = Field(..., description="Resolved destination name or input place")
+    language: str = Field(default="ta", description="Response language: 'ta' or 'en'")
+    departure_time: str = Field(..., description="Scheduled departure time e.g. '10:00:00'")
     total_options: int = Field(..., description="Total number of journey options found")
     options: List[JourneyOption] = Field(default=[], description="List of journey options with legs, stops, and schedules")
     raw_plan: Optional[JourneyPlanResponse] = Field(default=None, description="Complete underlying journey plan data")
     call_id: Optional[str] = Field(default=None, description="Echoed call identifier")
+
 
 

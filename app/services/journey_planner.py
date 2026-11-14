@@ -4,8 +4,9 @@ Computes direct journeys and transfer journeys across MTC Bus, CMRL Metro, and S
 Respects stop sequences, timetable schedules, service calendars, and walking interchanges.
 """
 
+import re
 import datetime
-from typing import List, Dict, Any, Optional, Tuple, Set
+from typing import List, Dict, Any, Optional, Tuple, Set, Union
 import sqlite3
 from app.config import settings
 from app.models.journey import (
@@ -29,14 +30,100 @@ from app.services.localization import (
     get_disclaimer,
 )
 
+IST_TIMEZONE = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+MODE_NORMALIZATION: Dict[str, str] = {
+    "bus": "Bus",
+    "buses": "Bus",
+    "metro": "Metro",
+    "train": "Suburban Rail",
+    "trains": "Suburban Rail",
+    "suburban": "Suburban Rail",
+    "suburban rail": "Suburban Rail",
+    "rail": "Suburban Rail",
+    "railway": "Suburban Rail",
+}
+
+
+def normalize_modes_filter(modes: Optional[Union[List[str], str]]) -> Optional[List[str]]:
+    """Normalize user mode input to canonical database values: ['Bus', 'Metro', 'Suburban Rail']."""
+    if not modes:
+        return None
+    if isinstance(modes, str):
+        mode_list = [modes]
+    else:
+        mode_list = list(modes)
+
+    normalized: Set[str] = set()
+    for m in mode_list:
+        if not m:
+            continue
+        cleaned = str(m).strip().lower()
+        if cleaned in ("all", "any", "transit", "public transport", "everything"):
+            return None
+        canon = MODE_NORMALIZATION.get(cleaned, cleaned.title())
+        normalized.add(canon)
+
+    return list(normalized) if normalized else None
+
+
+def parse_departure_time(t_str: Optional[str]) -> Tuple[int, str]:
+    """
+    Parse a flexible departure time string into (seconds_from_midnight, 'HH:MM:SS').
+    Supports:
+      - None / empty: current Indian Standard Time (Asia/Kolkata, UTC+5:30)
+      - HH:MM:SS / HH:MM
+      - 12-hour AM/PM e.g. '10:00 AM', '10:00am', '10 AM', '2:30 PM'
+    """
+    if not t_str or not str(t_str).strip():
+        now_ist = datetime.datetime.now(IST_TIMEZONE)
+        sec = now_ist.hour * 3600 + now_ist.minute * 60 + now_ist.second
+        return sec, now_ist.strftime("%H:%M:%S")
+
+    raw = str(t_str).strip()
+
+    # 1. Check for 12-hour AM/PM format (e.g. '10:00 AM', '10 AM', '2:30 PM')
+    match_12h = re.match(r"^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(AM|PM|am|pm)$", raw, re.IGNORECASE)
+    if match_12h:
+        h = int(match_12h.group(1))
+        m = int(match_12h.group(2) or 0)
+        s = int(match_12h.group(3) or 0)
+        period = match_12h.group(4).upper()
+        if period == "PM" and h < 12:
+            h += 12
+        elif period == "AM" and h == 12:
+            h = 0
+        sec = h * 3600 + m * 60 + s
+        return sec, f"{h:02d}:{m:02d}:{s:02d}"
+
+    # 2. Check for HH:MM:SS or HH:MM
+    parts = raw.split(":")
+    if len(parts) >= 2:
+        try:
+            h = int(parts[0])
+            m = int(parts[1])
+            s = int(parts[2]) if len(parts) > 2 else 0
+            sec = h * 3600 + m * 60 + s
+            return sec, f"{h:02d}:{m:02d}:{s:02d}"
+        except ValueError:
+            pass
+
+    # 3. Check for single integer hour e.g. "10"
+    if raw.isdigit():
+        h = int(raw)
+        if 0 <= h <= 24:
+            return h * 3600, f"{h:02d}:00:00"
+
+    # Fallback to current IST
+    now_ist = datetime.datetime.now(IST_TIMEZONE)
+    sec = now_ist.hour * 3600 + now_ist.minute * 60 + now_ist.second
+    return sec, now_ist.strftime("%H:%M:%S")
+
 
 def time_to_sec(t_str: str) -> int:
-    """Convert HH:MM or HH:MM:SS to seconds from midnight."""
-    p = t_str.strip().split(":")
-    h = int(p[0])
-    m = int(p[1]) if len(p) > 1 else 0
-    s = int(p[2]) if len(p) > 2 else 0
-    return h * 3600 + m * 60 + s
+    """Safe backward-compatible wrapper returning integer seconds from midnight."""
+    sec, _ = parse_departure_time(t_str)
+    return sec
 
 
 def sec_to_time(sec: int) -> str:
@@ -45,6 +132,7 @@ def sec_to_time(sec: int) -> str:
     m = (sec % 3600) // 60
     s = sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
+
 
 
 def get_active_service_ids(
@@ -62,9 +150,9 @@ def get_active_service_ids(
             clean_date = date_str.replace("-", "").strip()
             dt = datetime.datetime.strptime(clean_date, "%Y%m%d")
         except Exception:
-            dt = datetime.datetime.now()
+            dt = datetime.datetime.now(IST_TIMEZONE)
     else:
-        dt = datetime.datetime.now()
+        dt = datetime.datetime.now(IST_TIMEZONE)
 
     date_int = int(dt.strftime("%Y%m%d"))
     date_formatted = dt.strftime("%Y-%m-%d")
@@ -203,10 +291,11 @@ def find_direct_journeys(
         query += " AND (r.route_short_name = ? COLLATE NOCASE OR r.route_id = ?)"
         params.extend([route_filter.strip(), route_filter.strip()])
 
-    if modes_filter:
-        m_placeholders = ",".join(["?"] * len(modes_filter))
+    norm_modes = normalize_modes_filter(modes_filter)
+    if norm_modes:
+        m_placeholders = ",".join(["?"] * len(norm_modes))
         query += f" AND r.mode_name IN ({m_placeholders})"
-        params.extend(modes_filter)
+        params.extend(norm_modes)
 
     query += " ORDER BY st1.departure_sec ASC LIMIT ?"
     params.append(limit * 2)
@@ -278,9 +367,12 @@ def find_transfer_journeys(
     if not origin_stops or not dest_stops or not active_services:
         return []
 
-    # Pick top candidate origin and destination stops (closest 2)
-    top_orig = [s["stop_id"] for s in origin_stops[:2]]
-    top_dest = [s["stop_id"] for s in dest_stops[:2]]
+    # Normalize modes filter
+    modes_filter = normalize_modes_filter(modes_filter)
+
+    # Pick top candidate origin and destination stops (closest up to 4)
+    top_orig = [s["stop_id"] for s in origin_stops[:4]]
+    top_dest = [s["stop_id"] for s in dest_stops[:4]]
 
     orig_map = {s["stop_id"]: s for s in origin_stops}
     dest_map = {s["stop_id"]: s for s in dest_stops}
@@ -300,7 +392,7 @@ def find_transfer_journeys(
           AND st1.departure_sec >= ?
           AND t1.service_id IN ({svc_placeholders})
         ORDER BY st1.departure_sec ASC
-        LIMIT 6
+        LIMIT 15
     ),
     leg1_reachable AS (
         SELECT l1.trip_id as trip1_id, l1.orig_stop_id, l1.dep1_sec, l1.seq1,
@@ -317,7 +409,7 @@ def find_transfer_journeys(
           AND st4.departure_sec >= ?
           AND st4.departure_sec <= ? + 10800
           AND t2.service_id IN ({svc_placeholders})
-        LIMIT 25
+        LIMIT 50
     ),
     leg2_reachable AS (
         SELECT d2.trip2_id, d2.dest_stop_id, d2.arr2_sec, d2.seq4,
@@ -420,9 +512,9 @@ def find_transfer_journeys(
 
 def plan_journey(request: JourneyPlanRequest) -> JourneyPlanResponse:
     """Main journey planning function."""
-    lang = request.language.lower()
-    dep_time_str = request.departure_time or datetime.datetime.now().strftime("%H:%M:%S")
-    dep_sec = time_to_sec(dep_time_str)
+    lang = request.language.lower() if request.language else "en"
+    dep_sec, dep_time_str = parse_departure_time(request.departure_time)
+    normalized_modes = normalize_modes_filter(request.modes)
 
     # 1. Resolve source and destination
     orig_candidates, orig_pt, orig_resolved_name = resolve_location(
@@ -432,13 +524,16 @@ def plan_journey(request: JourneyPlanRequest) -> JourneyPlanResponse:
         request.destination, radius_m=request.max_walk_distance_m
     )
 
+    now_ist = datetime.datetime.now(IST_TIMEZONE)
+    default_date = now_ist.strftime("%Y-%m-%d")
+
     if not orig_candidates:
         err_msg = get_text(lang, "error_unresolved_stop", query=str(request.source))
         return JourneyPlanResponse(
             status="error",
             language=lang,
             departure_time=dep_time_str,
-            service_date=request.date or datetime.datetime.now().strftime("%Y-%m-%d"),
+            service_date=request.date or default_date,
             source_resolved=orig_resolved_name,
             destination_resolved=dest_resolved_name,
             direct_journeys_found=0,
@@ -458,7 +553,7 @@ def plan_journey(request: JourneyPlanRequest) -> JourneyPlanResponse:
             status="error",
             language=lang,
             departure_time=dep_time_str,
-            service_date=request.date or datetime.datetime.now().strftime("%Y-%m-%d"),
+            service_date=request.date or default_date,
             source_resolved=orig_resolved_name,
             destination_resolved=dest_resolved_name,
             direct_journeys_found=0,
@@ -487,7 +582,7 @@ def plan_journey(request: JourneyPlanRequest) -> JourneyPlanResponse:
             dep_sec=dep_sec,
             active_services=active_services,
             route_filter=request.route_filter,
-            modes_filter=request.modes,
+            modes_filter=normalized_modes,
             limit=settings.MAX_JOURNEY_RESULTS,
         )
 
@@ -620,6 +715,12 @@ def plan_journey(request: JourneyPlanRequest) -> JourneyPlanResponse:
                 ranking_score=round(rank_score, 2),
                 legs=legs,
                 is_live=False,
+                primary_mode=rec["mode_name"],
+                primary_route=rec["route_short_name"],
+                boarding_stop=rec["orig_stop_name"],
+                destination_stop=rec["dest_stop_name"],
+                fare=None,
+                data_notice="Scheduled timetable data (GTFS static). Real-time GPS unavailable.",
             ))
             journey_idx += 1
 
@@ -632,7 +733,7 @@ def plan_journey(request: JourneyPlanRequest) -> JourneyPlanResponse:
                 dest_stops=dest_candidates,
                 dep_sec=dep_sec,
                 active_services=active_services,
-                modes_filter=request.modes,
+                modes_filter=normalized_modes,
                 limit=settings.MAX_JOURNEY_RESULTS,
             )
             transfer_results_count = len(transfer_results)
@@ -824,6 +925,12 @@ def plan_journey(request: JourneyPlanRequest) -> JourneyPlanResponse:
                     ranking_score=round(r_score, 2),
                     legs=legs,
                     is_live=False,
+                    primary_mode=f"{m1['mode_name']} + {m2['mode_name']}",
+                    primary_route=f"{m1['route_short_name']} -> {m2['route_short_name']}",
+                    boarding_stop=m1["orig_name"],
+                    destination_stop=m2["dest_name"],
+                    fare=None,
+                    data_notice="Scheduled timetable data (GTFS static). Real-time GPS unavailable.",
                 ))
                 t_idx += 1
 

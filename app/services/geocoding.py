@@ -3,6 +3,7 @@ Geocoding, spatial indexing, and stop resolution service for Kural Transit Engin
 """
 
 import math
+import re
 from typing import List, Dict, Any, Optional, Tuple, Union
 import numpy as np
 from scipy.spatial import cKDTree
@@ -13,6 +14,77 @@ from app.config import settings
 _kdtree: Optional[cKDTree] = None
 _stops_data: List[Dict[str, Any]] = []
 _stop_id_to_index: Dict[str, int] = {}
+
+TAMIL_LOCALITY_MAP = {
+    "பூந்தமல்லி": "Poonamallee",
+    "போரூர்": "Porur",
+    "கிண்டி": "Guindy",
+    "தாம்பரம்": "Tambaram",
+    "சென்ட்ரல்": "Central",
+    "சென்னை சென்ட்ரல்": "Chennai Central",
+    "எழும்பூர்": "Egmore",
+    "கோயம்பேடு": "Koyambedu",
+    "வடபழனி": "Vadapalani",
+    "அடையாறு": "Adyar",
+    "திருவான்மியூர்": "Thiruvanmiyur",
+    "வேளச்சேரி": "Velachery",
+    "ஆவடி": "Avadi",
+    "அம்பத்தூர்": "Ambattur",
+    "பிராட்வே": "Broadway",
+    "தி.நகர்": "T Nagar",
+    "தி நகர்": "T Nagar",
+    "தியாகராய நகர்": "T Nagar",
+    "அண்ணா நகர்": "Anna Nagar",
+    "பல்லாவரம்": "Pallavaram",
+    "குரோம்பேட்டை": "Chromepet",
+    "பாரிமுனை": "Parrys",
+    "மீனம்பாக்கம்": "Meenambakkam",
+    "செங்குன்றம்": "Red Hills",
+    "மாதவரம்": "Madhavaram",
+    "சோழிங்கநல்லூர்": "Sholinganallur",
+    "திருவொற்றியூர்": "Tiruvottiyur",
+}
+
+COMMON_LOCALITY_SUFFIXES = [
+    r"\bbus\s+terminus\b",
+    r"\bbus\s+stand\b",
+    r"\bbus\s+stop\b",
+    r"\brailway\s+station\b",
+    r"\bmetro\s+station\b",
+    r"\bterminus\b",
+    r"\broundana\b",
+    r"\broundtana\b",
+    r"\bjunction\b",
+    r"\bcircle\b",
+    r"\bdepot\b",
+    r"\bstation\b",
+    r"\bjn\b",
+    r"\bstop\b",
+    r"\bstand\b",
+    # Tanglish particles
+    r"\b(la|le|ku|kku|lendhu|lerundhu|ilirunthu)\b",
+]
+
+
+def clean_locality_query(query: str) -> str:
+    """Normalize a place or stop name by stripping punctuation, Tamil script or common noise words."""
+    cleaned = query.strip()
+    
+    # Check Tamil script dictionary
+    if cleaned in TAMIL_LOCALITY_MAP:
+        return TAMIL_LOCALITY_MAP[cleaned]
+    for tam, eng in TAMIL_LOCALITY_MAP.items():
+        if tam in cleaned:
+            cleaned = cleaned.replace(tam, eng)
+
+    # Clean punctuation e.g. T. Nagar -> T Nagar
+    cleaned = cleaned.replace(".", " ")
+    for pattern in COMMON_LOCALITY_SUFFIXES:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
 
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -160,26 +232,36 @@ def resolve_location(
         return [dist_record], point, direct_stop["stop_name"]
 
     # Case 3: Stop name search (text query)
+    cleaned_query = clean_locality_query(query_str)
+    search_terms = [query_str]
+    if cleaned_query.lower() != query_str.lower() and len(cleaned_query) >= 3:
+        search_terms.append(cleaned_query)
+
+    matches = []
     with get_db() as conn:
         cur = conn.cursor()
-        # Search with prioritized relevance: exact match > prefix match > word match > substring
-        cur.execute("""
-            SELECT stop_id, stop_name, stop_lat, stop_lon, location_type, 
-                   parent_station, agency_id, is_active
-            FROM stops
-            WHERE stop_name LIKE ?
-            ORDER BY 
-                (CASE 
-                    WHEN LOWER(stop_name) = LOWER(?) THEN 1
-                    WHEN LOWER(stop_name) LIKE LOWER(? || ' %') THEN 2
-                    WHEN LOWER(stop_name) LIKE LOWER(? || '%') THEN 3
-                    WHEN LOWER(stop_name) LIKE LOWER('% ' || ? || '%') THEN 4
-                    ELSE 5
-                 END) ASC,
-                is_active DESC, location_type ASC
-            LIMIT 20
-        """, (f"%{query_str}%", query_str, query_str, query_str, query_str))
-        matches = [dict(r) for r in cur.fetchall()]
+        for term in search_terms:
+            # Search with prioritized relevance: exact match > prefix match > word match > substring
+            cur.execute("""
+                SELECT stop_id, stop_name, stop_lat, stop_lon, location_type, 
+                       parent_station, agency_id, is_active
+                FROM stops
+                WHERE stop_name LIKE ?
+                ORDER BY 
+                    (CASE 
+                        WHEN LOWER(stop_name) = LOWER(?) THEN 1
+                        WHEN LOWER(stop_name) LIKE LOWER(? || ' %') THEN 2
+                        WHEN LOWER(stop_name) LIKE LOWER(? || '%') THEN 3
+                        WHEN LOWER(stop_name) LIKE LOWER('% ' || ? || '%') THEN 4
+                        ELSE 5
+                     END) ASC,
+                    is_active DESC, location_type ASC
+                LIMIT 20
+            """, (f"%{term}%", term, term, term, term))
+            found_rows = [dict(r) for r in cur.fetchall()]
+            if found_rows:
+                matches = found_rows
+                break
 
     if not matches:
         return [], None, query_str

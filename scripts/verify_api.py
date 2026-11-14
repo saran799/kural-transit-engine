@@ -104,4 +104,29 @@ if res_ta.journeys:
     for leg in j_ta.legs:
         print(f"  [{leg.leg_sequence}] {leg.mode} - {leg.instruction}")
 
+print("\n" + "=" * 60)
+print("6. ELEVENLABS TOOL ENDPOINT: POONAMALLEE TO PORUR AT 10:00 AM (TAMIL)")
+print("=" * 60)
+from app.api.routes.journey import search_journey_tool
+from app.models.journey import KuralToolJourneyRequest
+
+tool_req = KuralToolJourneyRequest(
+    origin="Poonamallee",
+    destination="Porur",
+    departure_time="10:00 AM",
+    language="ta",
+    call_id="call_test_acceptance_001"
+)
+tool_res = search_journey_tool(tool_req)
+print(f"Found: {tool_res.found}")
+print(f"Origin Resolved: {tool_res.origin}")
+print(f"Destination Resolved: {tool_res.destination}")
+print(f"Departure Time: {tool_res.departure_time}")
+print(f"Total Options: {tool_res.total_options}")
+print(f"Spoken Response (Voice Delivery):\n\"{tool_res.spoken_response}\"")
+
+assert tool_res.found is True, "Expected tool journey found"
+assert tool_res.total_options > 0, "Expected >0 options"
+assert len(tool_res.spoken_response) > 20, "Expected natural spoken response"
+
 print("\nAll direct verifications passed successfully!")

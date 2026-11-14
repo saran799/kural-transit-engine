@@ -80,7 +80,7 @@ def test_kural_tool_search_journey_unresolvable_location():
 
 
 def test_kural_tool_morning_departure_10am():
-    """Test voice tool with explicit morning departure time at 10:00 (HH:MM format)."""
+    """Test voice tool with explicit morning departure time at 10:00."""
     req = KuralToolJourneyRequest(
         origin="Poonamallee",
         destination="Porur",
@@ -90,11 +90,82 @@ def test_kural_tool_morning_departure_10am():
     res = search_journey_tool(req)
     assert res.found is True
     assert res.total_options > 0
-    assert res.raw_plan is not None
-    assert res.raw_plan.departure_time == "10:00"
-    # Ensure options depart at or after 10:00:00
+    assert res.departure_time == "10:00:00"
     for opt in res.options:
         assert opt.departure_time >= "10:00:00"
+
+
+def test_kural_tool_primary_acceptance_scenario():
+    """
+    Primary Acceptance Scenario:
+    Origin: Poonamallee
+    Destination: Porur
+    Preferred departure time: 10:00 AM
+    Language: Tamil (ta)
+    """
+    req = KuralToolJourneyRequest(
+        origin="Poonamallee",
+        destination="Porur",
+        departure_time="10:00 AM",
+        language="ta",
+        call_id="call_acceptance_001"
+    )
+    res = search_journey_tool(req)
+    assert res.found is True
+    assert res.total_options > 0
+    assert res.origin is not None
+    assert res.destination is not None
+    assert res.departure_time == "10:00:00"
+    assert res.language == "ta"
+    assert "நேரடி" in res.spoken_response or "வழித்தடம்" in res.spoken_response or "பேருந்து" in res.spoken_response
+    assert "நிமிடங்கள்" in res.spoken_response
+    assert res.call_id == "call_acceptance_001"
+    for opt in res.options:
+        assert opt.departure_time >= "10:00:00"
+        assert opt.primary_route is not None
+        assert opt.primary_mode is not None
+
+
+def test_kural_tool_lowercase_mode_bus():
+    """Test that lowercase mode='bus' works seamlessly."""
+    req = KuralToolJourneyRequest(
+        origin="Poonamallee",
+        destination="Porur",
+        departure_time="10:00:00",
+        mode="bus",
+        language="en"
+    )
+    res = search_journey_tool(req)
+    assert res.found is True
+    assert res.total_options > 0
+    assert all(opt.primary_mode == "Bus" for opt in res.options)
+
+
+def test_kural_tool_colloquial_locality_names():
+    """Test colloquial Chennai locality names with suffixes ('Bus Stand', 'Roundana')."""
+    req = KuralToolJourneyRequest(
+        origin="Poonamallee Bus Stand",
+        destination="Porur Roundana",
+        departure_time="10:00 AM",
+        language="en"
+    )
+    res = search_journey_tool(req)
+    assert res.found is True
+    assert res.total_options > 0
+
+
+def test_kural_tool_tamil_script_input():
+    """Test voice tool when Tamil script is sent by speech-to-text."""
+    req = KuralToolJourneyRequest(
+        origin="பூந்தமல்லி",
+        destination="போரூர்",
+        departure_time="10:00 AM",
+        language="ta"
+    )
+    res = search_journey_tool(req)
+    assert res.found is True
+    assert res.total_options > 0
+
 
 
 

@@ -15,25 +15,67 @@ router = APIRouter(tags=["Journey Planning"])
 
 
 def _generate_spoken_response(plan_res: JourneyPlanResponse, language: str) -> str:
-    """Generate a concise, clear spoken response for ElevenLabs text-to-speech."""
-    is_ta = (language or "").lower() == "ta"
-    
+    """
+    Generate natural, conversational spoken response for ElevenLabs voice delivery.
+    Sounds like a helpful local transit assistant speaking in Tamil, Tanglish, or English.
+    """
+    is_ta = (language or "").lower().startswith("ta")
+    src = plan_res.source_resolved
+    dst = plan_res.destination_resolved
+    dep_time = plan_res.departure_time
+
     if plan_res.status != "success" or not plan_res.journeys:
         if is_ta:
-            return f"மன்னிக்கவும், {plan_res.source_resolved} முதல் {plan_res.destination_resolved} வரை எந்த பொதுப் போக்குவரத்து வழியும் கிடைக்கவில்லை. மாற்று நேரம் அல்லது வேறு நிறுத்தத்தை முயற்சிக்கவும்."
-        return f"Sorry, no transit journeys were found from {plan_res.source_resolved} to {plan_res.destination_resolved} around {plan_res.departure_time}. Please try a different departure time or nearby stops."
-    
+            return f"மன்னிக்கவும், {src}-லிருந்து {dst}-க்கு {dep_time}-க்கு திட்டமிடப்பட்ட பயணங்கள் எதுவும் கிடைக்கவில்லை. மாற்று நேரத்தையோ அல்லது அருகிலுள்ள வேறு நிறுத்தத்தையோ முயற்சிக்கவும்."
+        return f"Sorry, no transit journeys were found from {src} to {dst} around {dep_time}. Please try a different departure time or nearby stops."
+
     best = plan_res.journeys[0]
     total_min = int(round(best.total_duration_minutes))
-    
-    if is_ta:
-        msg = f"{plan_res.source_resolved} முதல் {plan_res.destination_resolved} வரை {len(plan_res.journeys)} பயண வழிகள் உள்ளன. "
-        msg += f"முதல் வழி: {best.summary}, புறப்படும் நேரம் {best.departure_time}, சேரும் நேரம் {best.arrival_time}, பயண நேரம் சுமார் {total_min} நிமிடங்கள்."
-        return msg
+
+    # If it's a direct journey (0 transfers)
+    if best.transfers_count == 0:
+        route_num = best.primary_route or ""
+        mode_str = best.primary_mode or "Bus"
+        if is_ta:
+            msg = f"உங்களுக்காக ஒரு நேரடி பொதுப்போக்குவரத்து வழித்தடம் கிடைத்துள்ளது. "
+            if route_num:
+                msg += f"{src}-லிருந்து வழித்தட எண் {route_num} பேருந்தில் ஏறி {dst} நிறுத்தத்தில் இறங்கலாம். "
+            else:
+                msg += f"{src}-லிருந்து ஏறி {dst} நிறுத்தத்தில் இறங்கலாம். "
+            msg += f"புறப்படும் நேரம் {best.departure_time}, சேரும் நேரம் {best.arrival_time}. பயண நேரம் சுமார் {total_min} நிமிடங்கள்."
+            if len(plan_res.journeys) > 1:
+                msg += f" மேலும் {len(plan_res.journeys) - 1} மாற்று வழிகளும் உள்ளன."
+            return msg
+        else:
+            msg = f"Found a direct {mode_str.lower()} service for your journey. "
+            if route_num:
+                msg += f"Board route {route_num} at {src} departing at {best.departure_time}, and alight at {dst} arriving at {best.arrival_time}. "
+            else:
+                msg += f"Depart from {src} at {best.departure_time} and arrive at {dst} at {best.arrival_time}. "
+            msg += f"Total journey time is approximately {total_min} minutes."
+            if len(plan_res.journeys) > 1:
+                msg += f" There are {len(plan_res.journeys) - 1} other options available as well."
+            return msg
+
+    # If it's a transfer journey (1 or more transfers)
     else:
-        msg = f"Found {len(plan_res.journeys)} journey options from {plan_res.source_resolved} to {plan_res.destination_resolved}. "
-        msg += f"Recommended option: {best.summary}, departing at {best.departure_time} and arriving at {best.arrival_time}. Total journey time is approximately {total_min} minutes."
-        return msg
+        transit_legs = [leg for leg in best.legs if leg.leg_type == "TRANSIT"]
+        if is_ta:
+            msg = f"{src}-லிருந்து {dst}-க்கு ஒரு இணைப்புப் பயணம் உள்ளது. "
+            if len(transit_legs) >= 2:
+                leg1, leg2 = transit_legs[0], transit_legs[1]
+                msg += f"முதலில் {leg1.departure_stop_name}-லிருந்து {leg1.route_short_name or ''} {leg1.mode}-இல் ஏறி {leg1.arrival_stop_name}-ல் இறங்கவும். "
+                msg += f"பின்னர் அங்கிருந்து {leg2.route_short_name or ''} {leg2.mode}-இல் ஏறி {leg2.arrival_stop_name}-க்கு செல்லலாம். "
+            msg += f"புறப்படும் நேரம் {best.departure_time}. மொத்த பயண நேரம் சுமார் {total_min} நிமிடங்கள்."
+            return msg
+        else:
+            msg = f"Found a connecting journey with {best.transfers_count} transfer. "
+            if len(transit_legs) >= 2:
+                leg1, leg2 = transit_legs[0], transit_legs[1]
+                msg += f"First take {leg1.mode} {leg1.route_short_name or ''} from {leg1.departure_stop_name} to {leg1.arrival_stop_name}. "
+                msg += f"Then transfer to {leg2.mode} {leg2.route_short_name or ''} to reach {leg2.arrival_stop_name}. "
+            msg += f"Departing at {best.departure_time}. Total journey time is approximately {total_min} minutes."
+            return msg
 
 
 @router.post("/api/journey/plan", response_model=JourneyPlanResponse)
@@ -77,7 +119,7 @@ def search_journey_tool(request: KuralToolJourneyRequest):
     source_val = request.origin if request.origin is not None else request.source
     if not source_val:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Either 'origin' or 'source' must be provided."
         )
     
@@ -102,6 +144,10 @@ def search_journey_tool(request: KuralToolJourneyRequest):
     return KuralToolJourneyResponse(
         found=found,
         spoken_response=spoken,
+        origin=plan_res.source_resolved or str(source_val),
+        destination=plan_res.destination_resolved or str(request.destination),
+        language=request.language or "ta",
+        departure_time=plan_res.departure_time,
         total_options=len(plan_res.journeys),
         options=plan_res.journeys,
         raw_plan=plan_res,
